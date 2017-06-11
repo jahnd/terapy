@@ -11,6 +11,9 @@ from scipy.signal import windows, argrelmin
 from scipy.constants import c
 from scipy.optimize import minimize
 from scipy.interpolate import interp1d
+from scipy.stats import t as studentt
+from uncertainties import unumpy
+
 
 class TDS:
 
@@ -20,7 +23,7 @@ class TDS:
         self.fmaxCalculation = 2e12
 
         self.fminPhase = 0.4e12
-        self.fmaxPhase = 1.4e12
+        self.fmaxPhase = 2e12
         self.windowSlope = 5e-12
 
         self.fbins = None
@@ -75,6 +78,56 @@ class TDS:
         self.fminPhase = fmin
         self.fmaxPhase = fmax
         self.calculateTransferFunction()
+
+    def uncertaintyH(self):
+        #propagate variance to spectrum
+        fvars = np.sum(self.var_s)
+        fvarr = np.sum(self.var_r)
+
+        ufdsam_r = unumpy.uarray(self.fdsam.real, fvars**0.5)
+        ufdsam_i = unumpy.uarray(self.fdsam.imag, fvars**0.5)
+        ufdref_r = unumpy.uarray(self.fdref.real, fvarr**0.5)
+        ufdref_i = unumpy.uarray(self.fdref.imag, fvarr**0.5)
+
+        #calculate angle and phase uncertainty
+        uphase_ref = unumpy.arctan2(ufdref_i, ufdref_r)
+        uphase_sam = unumpy.arctan2(ufdsam_i, ufdsam_r)
+
+        uphase_sam_stddevs = unumpy.std_devs(uphase_sam)
+        uphase_ref_stddevs = unumpy.std_devs(uphase_ref)
+
+        # do the phase interpolation only considering the nominal values
+        phasesamC, b = phaseOffsetRemoval(self.freq, np.unwrap(
+            unumpy.nominal_values(uphase_sam)), self.fminPhase, self.fmaxPhase)
+        phaserefC, a = phaseOffsetRemoval(self.freq, np.unwrap(
+            unumpy.nominal_values(uphase_ref)), self.fminPhase, self.fmaxPhase)
+
+        uphase_ref = unumpy.uarray(phaserefC, uphase_ref_stddevs)
+        uphase_sam = unumpy.uarray(phasesamC, uphase_sam_stddevs)
+
+        ufabss = (ufdsam_r**2 + ufdsam_i**2)**0.5
+        ufabsr = (ufdref_r**2 + ufdref_i**2)**0.5
+        uHabs = ufabss / ufabsr
+        uHphase = uphase_sam - uphase_ref
+        self.uHabs = uHabs,
+        self.uHphase = uHphase
+
+        #calculate real and imaginary uncertainty
+        ufdsam_r = unumpy.uarray(self.fdsam.real, fvars**0.5)
+        ufdsam_i = unumpy.uarray(self.fdsam.imag, fvars**0.5)
+        ufdref_r = unumpy.uarray(self.fdref.real, fvarr**0.5)
+        ufdref_i = unumpy.uarray(self.fdref.imag, fvarr**0.5)
+
+        Hr = (ufdsam_r * ufdref_r + ufdsam_i * ufdref_i) / \
+            (ufdref_r**2 + ufdref_i**2)
+        Hi = (ufdsam_i * ufdref_r - ufdsam_r * ufdref_i) / \
+            (ufdref_r**2 + ufdref_i**2)
+
+        self.uHabs = uHabs,
+        self.uHphase = uHphase
+        self.uHreal = Hr
+        self.uHimag = Hi
+        return uHabs, uHphase, Hr, Hi
 
     def plotTimeDomainData(self):
         plt.figure()
@@ -134,7 +187,8 @@ class TDS:
         plt.ylabel(r'Absorption $\kappa$')
         plt.legend(loc='best')
         plt.tight_layout()
-    
+
+
 class OneLayerSystem(TDS):
     def __init__(self, dmeasured = 1e-3):
         super().__init__()
@@ -260,7 +314,7 @@ class OneLayerSystem(TDS):
     
         self.changeCalculationDomain(self.fminCalculation, self.fmaxCalculation)
 
-        dii = np.linspace(ds[0],ds[-1],len(ds)*20)
+        dii = np.arange(ds[0],ds[-1],0.25e-6)
         pp = interp1d(ds, tvs,kind='cubic')
         self.dopt = dii[np.argmin(pp(dii))]
         print('Best Thickness: {:2.2f} µm'.format(self.dopt*1e6))
@@ -299,8 +353,8 @@ class ThreeLayerSystem(TDS):
         self.n3 = n3
         self.d1 = d1
         self.d3 = d3
-    
-    def calculatetmax(self):
+
+    def calculateWays(self):
         n1 = np.mean(self.n1.real)
         n3 = np.mean(self.n3.real)
         deltat = (self.taxis[np.argmax(self.sample)]-self.taxis[np.argmax(self.reference)])
@@ -308,50 +362,83 @@ class ThreeLayerSystem(TDS):
         opticalThickness = c*deltat-(n1-1)*self.d1-(n3-1)*self.d3
         n2_avg  = opticalThickness/self.dmeasured+1
         tmax = self.taxis[-1]-self.taxis[np.argmax(self.sample)]
-        
-        return n2_avg, tmax
+        self.ways = calculatePossibleWays(np.array([n1,n2_avg,n3]),
+                              np.array([self.d1,self.dmeasured,self.d3]),tmax)
+        return self.ways
 
-    
-    def calculateCoefficient(l,f,ns,ds,n_medium):
-        #this might be easier done
-        tt  = t(n_medium,ns[0])*t(ns[-1],n_medium)
-        indexes = getIndex(l)
-        diffs = np.diff(indexes)
-        k=2*np.pi*f/c
-        tt*=np.exp(-1j*np.sum(ns[indexes]*ds[indexes], axis=0)*k)
-        tt*=np.exp(1j*np.sum(ds, axis=0)*n_medium*k)
-        for i in range(len(diffs)):
-            if diffs[i] == 1: #go left right
-                tt*=t(ns[indexes[i]],ns[indexes[i]+1])
-                #print('tlr')
-            elif diffs[i] == -1: #go right left
-                tt*=t(ns[indexes[i]],ns[indexes[i]-1])
-                #print('trl')
-            elif diffs[i] == 0 and l[i] > 0:
-                if len(ns) == indexes[i]+1:
-                    #we are at the outermost boundary
-                    no = n_medium
-                else:
-                    no = ns[indexes[i]+1]
-                tt*= r(ns[indexes[i]],no)
-                #print('rr')
-    
-            elif diffs[i] == 0 and l[i]<0:
-                if indexes[i] == 0:
-                    #we are at the innermost boundary
-                    no = n_medium
-                else:
-                    no = ns[indexes[i]-1]
-                tt*= r(ns[indexes[i]],no)
-                #print('rl')
-        return tt
-    
-    def getH(ns,ds,fs,n_medium,tmax):
-        l = calculatePossibleWays(ns,ds,tmax)
+    def Ht(self, omega, ns, ds, ways):
         ps = 0
-        for ll in l:
-            ps+=calculateCoefficient(ll,fs,n_medium)
+        for ll in ways:
+            ps += calculateCoefficient(omega,ns,ds,1,ll)
         return ps
+    
+    def calculateBestThickness(self, nFilling = 1, dstep = 5e-6, dinterval=30e-6,
+                               method='BruteForce', doPlot = False):
+        
+        self.calculateWays()
+        ns = np.asarray([self.n1,np.ones(self.n1.shape,dtype=np.complex64)*nFilling,self.n3])
+        ds = np.asarray([[self.d1], [self.dmeasured], [self.d3]])*np.ones(ns.shape)
+        
+        dd = np.arange(self.dmeasured-dinterval,self.dmeasured+dinterval, dstep)
+        
+        Hm = self.Har * np.exp(1j*self.Hpr)
+        val = []
+        
+        for d in dd:
+            ds[1] = d
+            Ht = self.Ht(2*np.pi*self.fr, ns, ds,self.ways)
+            val.append(np.sum((Hm.real-Ht.real)**2 + (Hm.imag-Ht.imag)**2))
+        
+        val = np.array(val)
+        dii = np.arange(dd[0],dd[-1],0.25e-6)
+        pp = interp1d(dd, val,kind='cubic')
+        self.dopt = dii[np.argmin(pp(dii))]
+        if doPlot:
+            plt.figure()
+            plt.plot(dd*1e6,val,'ks',markerfacecolor='none')
+            plt.plot(dii*1e6,pp(dii))
+            tvv = np.amax(val)-np.amin(val)
+            plt.vlines([self.dopt*1e6],np.amin(val)-0.1*val,np.amax(val),linestyles=':',linewidth=2)
+            plt.text(dd[2]*1e6,np.amin(val),s='Best Thickness: {:2.2f} µm'.format(self.dopt*1e6))
+            plt.xlabel(r'Thickness d ($\mu$m)')
+            plt.ylabel('Deviation from Measurement')
+            plt.tight_layout()
+        return self.dopt
+        
+    
+def calculateCoefficient(omega,ns,ds,n_medium,l):
+    #this might be easier done
+    tt  = t(n_medium,ns[0])*t(ns[-1],n_medium)
+    indexes = getIndex(l)
+    diffs = np.diff(indexes)
+    
+    tt*=np.exp(-1j*np.sum(ns[indexes]*ds[indexes], axis=0)*omega/c)
+    tt*=np.exp(1j*np.sum(ds, axis=0)*n_medium*omega/c)
+    for i in range(len(diffs)):
+        if diffs[i] == 1: #go left right
+            tt*=t(ns[indexes[i]],ns[indexes[i]+1])
+            #print('tlr')
+        elif diffs[i] == -1: #go right left
+            tt*=t(ns[indexes[i]],ns[indexes[i]-1])
+            #print('trl')
+        elif diffs[i] == 0 and l[i] > 0:
+            if len(ns) == indexes[i]+1:
+                #we are at the outermost boundary
+                no = n_medium
+            else:
+                no = ns[indexes[i]+1]
+            tt*= r(ns[indexes[i]],no)
+            #print('rr')
+
+        elif diffs[i] == 0 and l[i]<0:
+            if indexes[i] == 0:
+                #we are at the innermost boundary
+                no = n_medium
+            else:
+                no = ns[indexes[i]-1]
+            tt*= r(ns[indexes[i]],no)
+            #print('rl')
+    return tt
 
 def calculatePossibleWays(ns,ds,tmax=100e-12):
     # some checks
@@ -485,22 +572,38 @@ if __name__ == '__main__':
 
     glass1 = OneLayerSystem(710e-6)
     glass1.loadData(refn, samn)
-    glass1.cropTimeData(200e-12)
+    #glass1.cropTimeData(210e-12)
     glass1.fbins = 10e9 
     glass1.calculateTransferFunction()
     glass1.estimateNoEchos()
     #dopt, ds, tvs = glass1.calculateBestThickness()
-    glass1.calculateN(707.4e-6)
+    glass1.dopt = 707.4e-6
+    glass1.calculateN(glass1.dopt)
 
     refn = glob.glob('Oil/Receiver glass/M1/*Reference*')
     samn = glob.glob('Oil/Receiver glass/M1/*Cuv*')
 
     glass2 = OneLayerSystem(710e-6)
     glass2.loadData(refn, samn)
-    glass2.cropTimeData(200e-12)
+    #glass2.cropTimeData(210e-12)
     glass2.fbins = 10e9 
     glass2.calculateTransferFunction()
     glass2.estimateNoEchos()
     #dopt, ds, tvs = glass2.calculateBestThickness()
-    glass2.calculateN(710.6e-6)
-
+    glass2.dopt = 710.6e-6
+    glass2.calculateN(glass2.dopt)
+    
+    
+# %%
+    emptyCuvette = ThreeLayerSystem(glass1.n, glass2.n, glass1.dopt, glass2.dopt, 5900e-6)
+    refn = glob.glob('Oil/Cuvetttes/0EmptyNewCuvettes/M1/*Reference*')
+    samn = glob.glob('Oil/Cuvetttes/0EmptyNewCuvettes/M1/*Cuvette1*')
+    emptyCuvette.loadData(refn, samn)
+    
+    #Cuvette.cropTimeData(210e-12)
+    emptyCuvette.fbins = 10e9
+    #Cuvette.plotTimeDomainData()
+    emptyCuvette.calculateTransferFunction()
+    dopt = emptyCuvette.calculateBestThickness(dstep=7.5e-6, dinterval=300e-6, doPlot=True)
+    
+    
