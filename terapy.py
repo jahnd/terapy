@@ -55,7 +55,8 @@ class TDS:
         self.raw_taxis, self.raw_sample, self.raw_var_s = loadfiles(fns_sam)
         if self.sn is None:
             self.sn = fns_sam[0].split('/')[-1]
-
+        #not so nice at the moment:
+        self.noDatas = min(len(fns_ref),len(fns_sam))
         self.raw_taxis *= timefactor
         self.cropTimeData(tmax)
 
@@ -79,7 +80,7 @@ class TDS:
         self.fmaxPhase = fmax
         self.calculateTransferFunction()
 
-    def uncertaintyH(self):
+    def calculateUncertaintyH(self):
         #propagate variance to spectrum
         fvars = np.sum(self.var_s)
         fvarr = np.sum(self.var_r)
@@ -97,9 +98,9 @@ class TDS:
         uphase_ref_stddevs = unumpy.std_devs(uphase_ref)
 
         # do the phase interpolation only considering the nominal values
-        phasesamC, b = phaseOffsetRemoval(self.freq, np.unwrap(
+        phasesamC, b = phaseOffsetRemoval(self.freqs, np.unwrap(
             unumpy.nominal_values(uphase_sam)), self.fminPhase, self.fmaxPhase)
-        phaserefC, a = phaseOffsetRemoval(self.freq, np.unwrap(
+        phaserefC, a = phaseOffsetRemoval(self.freqs, np.unwrap(
             unumpy.nominal_values(uphase_ref)), self.fminPhase, self.fmaxPhase)
 
         uphase_ref = unumpy.uarray(phaserefC, uphase_ref_stddevs)
@@ -109,8 +110,6 @@ class TDS:
         ufabsr = (ufdref_r**2 + ufdref_i**2)**0.5
         uHabs = ufabss / ufabsr
         uHphase = uphase_sam - uphase_ref
-        self.uHabs = uHabs,
-        self.uHphase = uHphase
 
         #calculate real and imaginary uncertainty
         ufdsam_r = unumpy.uarray(self.fdsam.real, fvars**0.5)
@@ -123,18 +122,33 @@ class TDS:
         Hi = (ufdsam_i * ufdref_r - ufdsam_r * ufdref_i) / \
             (ufdref_r**2 + ufdref_i**2)
 
-        self.uHabs = uHabs,
+        self.uHabs = uHabs
         self.uHphase = uHphase
         self.uHreal = Hr
         self.uHimag = Hi
         return uHabs, uHphase, Hr, Hi
-
+    
     def plotTimeDomainData(self):
         plt.figure()
-        plt.plot(self.taxis * 1e12, self.sample, 'k')
-        plt.plot(self.taxis * 1e12, self.reference, 'r')
+        plt.plot(self.taxis * 1e12, self.sample, 'k',label='Sample')
+        plt.plot(self.taxis * 1e12, self.reference, 'r',label='Reference')
         plt.xlabel('Time (ps)')
         plt.ylabel('Amplitude')
+        plt.legend()
+        
+    def plotTimeDomainDataUnc(self):
+        self.plotTimeDomainData()
+        
+        refi = studentt.interval(0.95,self.noDatas-1, loc=self.reference, scale=self.var_r**0.5)
+        sami = studentt.interval(0.95,self.noDatas-1, loc=self.sample, scale=self.var_s**0.5)
+        plt.fill_between(self.taxis*1e12,self.reference-self.var_r**0.5,self.reference+self.var_r**0.5,color='r',label=r'1$\sigma$',alpha=0.2)
+        plt.fill_between(self.taxis*1e12,self.sample-self.var_s**0.5,self.sample+self.var_s**0.5,color='k',alpha=0.2)
+        #plt.errorbar(self.taxis*1e12,self.sample, yerr=self.var_s**0.5,color='r',label='Reference')
+        plt.plot(self.taxis*1e12,refi[0],'r--',label='95 % confidence')
+        plt.plot(self.taxis*1e12,refi[1],'r--')
+        plt.plot(self.taxis*1e12,sami[0],'k--')
+        plt.plot(self.taxis*1e12,sami[1],'k--')
+        plt.legend()
 
     def plotFrequencyDomainData(self):
         plt.figure()
@@ -161,19 +175,30 @@ class TDS:
     def plotTransferFunction(self):
         plt.figure()
         ax1 = plt.gca()
-        ax1.plot(self.freqs / 1e12, self.Habs, linewidth=2)
+        ax1.plot(self.freqs / 1e12, self.Habs, 'k', linewidth=2)
         plt.axvspan(self.fminCalculation / 1e12, self.fmaxCalculation / 1e12,
                     color='b', alpha=0.1)
         ax2 = plt.twinx(plt.gca())
-        ax2.plot(self.freqs / 1e12, self.Hphase, linewidth=2, color='g')
+        ax2.plot(self.freqs / 1e12, self.Hphase, linewidth=2, color='r')
         ax2.hlines([0], self.freqs[0] / 1e12, self.freqs[-1] /1e12,
-                   linestyle=':', color='g', linewidth=2)
-        ax2.tick_params(axis='y', colors='g')
-        ax2.set_ylabel(r'$\angle H$', color='g')
+                   linestyle=':', color='r', linewidth=2)
+        ax2.tick_params(axis='y', colors='r')
+        ax2.set_ylabel(r'$\angle H$', color='r')
         ax1.set_ylabel(r'$|H|$')
         ax1.set_xlabel(r'Frequenz (THz)')
         plt.tight_layout()
-        
+    
+    def plotTransferFunctionUnc(self):
+        self.plotTransferFunction()
+        ax1, ax2 = plt.gcf().axes
+        lo = unumpy.nominal_values(self.uHabs) - unumpy.std_devs(self.uHabs)
+        hi = unumpy.nominal_values(self.uHabs) + unumpy.std_devs(self.uHabs)
+        ax1.fill_between(self.freqs / 1e12, lo, hi,color='k', alpha=0.2 )
+        lo = unumpy.nominal_values(self.uHphase) - unumpy.std_devs(self.uHphase)
+        hi = unumpy.nominal_values(self.uHphase) + unumpy.std_devs(self.uHphase)
+        ax2.fill_between(self.freqs / 1e12, lo, hi , color='r', alpha=0.2)
+        plt.tight_layout()
+    
     def plotRefractiveIndex(self):
         plt.figure()
         plt.subplot(211)
@@ -190,9 +215,13 @@ class TDS:
 
 
 class OneLayerSystem(TDS):
+    
+    Jac = None
+    
     def __init__(self, dmeasured = 1e-3):
         super().__init__()
         self.dmeasured = dmeasured
+        self.Jac = None
         
     def getnoPulses(self, n, d):
             tetalon = n * d * 2 / c
@@ -286,7 +315,6 @@ class OneLayerSystem(TDS):
         self.Har = self.Har[::freqstep]
         self.Hpr = self.Hpr[::freqstep]
         
-        
         ds = np.arange(self.dmeasured-dinterval,self.dmeasured+dinterval,dstep)
         
         tvs = []
@@ -314,12 +342,42 @@ class OneLayerSystem(TDS):
     
         self.changeCalculationDomain(self.fminCalculation, self.fmaxCalculation)
 
-        dii = np.arange(ds[0],ds[-1],0.25e-6)
+        dii = np.arange(ds[0],ds[-2],0.25e-6)
         pp = interp1d(ds, tvs,kind='cubic')
         self.dopt = dii[np.argmin(pp(dii))]
         print('Best Thickness: {:2.2f} µm'.format(self.dopt*1e6))
         
         return self.dopt, ds, tvs
+    
+    def getJac(self, omegaa, na, da, noPulses):
+        if OneLayerSystem.Jac is None:
+            # calculate derivative analytically
+            import sympy
+            n1, n, kappa, d, k0, M = sympy.symbols('n1 n kappa d k0 M')
+            expr1 = ((n1 - n - 1j * kappa) / (n1 + n + 1j * kappa)
+                     * sympy.exp(-1j * k0 * d * (n + 1j * kappa)))**2
+            expr = 4 * n1 * (n + 1j * kappa) / (n1 + n + 1j * kappa)**2 * sympy.exp(-1j * \
+                             k0 * d * (n + 1j * kappa - n1)) * (expr1**(M + 1) - 1) / (expr1 - 1)
+    
+            diff = sympy.diff(expr, n)
+            df = sympy.lambdify((n1, n, kappa, d, k0, M), diff, "numpy")
+            OneLayerSystem.Jac = df
+        return OneLayerSystem.Jac(1, na.real, na.imag, da, omegaa / c, noPulses)
+    
+    def calculateUncertaintyOpticalConstants(self):
+        fr, Hr = cropFrequencyData(self.freqs, self.uHreal, 
+                                   self.fminCalculation, self.fmaxCalculation)
+        fr, Hi = cropFrequencyData(self.freqs, self.uHimag, 
+                                   self.fminCalculation, self.fmaxCalculation)
+
+        a = self.getJac(2 * np.pi * fr, self.n, self.dcalculated, self.noPulses)
+        a1 = 1 / np.abs(a)**2 * a
+
+        self.stdn = (a1.real**2 * unumpy.std_devs(Hr)**2 +
+                a1.imag**2 * unumpy.std_devs(Hi)**2)**0.5
+        self.stdk = (a1.imag**2 * unumpy.std_devs(Hr)**2 +
+                a1.real**2 * unumpy.std_devs(Hi)**2)**0.5
+        return self.stdn, self.stdk    
 
     def plotTotalVariation(self, ds, tvs):
         dii = np.linspace(ds[0],ds[-1],len(ds)*20)
@@ -338,11 +396,49 @@ class OneLayerSystem(TDS):
     def plotRefractiveIndex(self, includeApproximation = False):
         super().plotRefractiveIndex()
         if includeApproximation:
-            n, kappa = self.calculateNApproximate(self.fr, self.Har, self.Hpr, self.dcalculated)    
+            n, kappa = self.calculateNApproximate(self.fr, self.Har, self.Hpr, self.dcalculated)
             f = plt.gcf()
             f.axes[0].plot(self.fr/1e12,n,'r', label='Approximate')
             f.axes[1].plot(self.fr/1e12,kappa,'r', label='Approximate')
-
+    
+    def plotRefractiveIndexUnc(self, includeApproximation = False):
+        self.plotRefractiveIndex(includeApproximation)
+        ax1, ax2 = plt.gcf().axes
+        ax1.fill_between(self.fr/1e12, self.n.real - self.stdn, self.n.real + self.stdn,color='r', alpha=0.2)
+        ax2.fill_between(self.fr/1e12, self.n.imag - self.stdk, self.n.imag + self.stdk,color='r', alpha=0.2)
+        ni = studentt.interval(0.95,self.noDatas-1, loc=self.n.real, scale = self.stdn)
+        ki = studentt.interval(0.95,self.noDatas-1, loc=self.n.imag, scale = self.stdk)
+        ax1.plot(self.fr/1e12,ni[0],'k--',label='95 % confidence')
+        ax1.plot(self.fr/1e12,ni[1],'k--')
+        ax2.plot(self.fr/1e12,ki[0],'k--')
+        ax2.plot(self.fr/1e12,ki[1],'k--')
+        if includeApproximation:
+            un, uk = self.calculateNApproximate(self.freqs, self.uHabs, self.uHphase, self.dcalculated)
+            lo = unumpy.nominal_values(un) - unumpy.std_devs(un)
+            hi = unumpy.nominal_values(un) + unumpy.std_devs(un)
+            ax1.fill_between(self.fr/1e12, lo, hi ,color='r', alpha=0.2)
+            lo = unumpy.nominal_values(uk) - unumpy.std_devs(uk)
+            hi = unumpy.nominal_values(uk) + unumpy.std_devs(uk)
+            ax2.fill_between(self.fr/1e12, lo, hi ,color='r', alpha=0.2)
+    
+    def plotAlpha(self):
+        
+        ni = unumpy.uarray(self.n.imag, self.stdk)
+        alpha = -ni * 2 * (2*np.pi*self.fr)/c*1e-2
+        itk = studentt.interval(0.95,self.noDatas-1, loc=unumpy.nominal_values(alpha),
+                         scale=unumpy.std_devs(alpha))
+        plt.figure()
+        plt.plot(self.fr/1e12, unumpy.nominal_values(alpha),'k',label=r'$\alpha$')
+        lo = unumpy.nominal_values(alpha) - unumpy.std_devs(alpha)
+        hi = unumpy.nominal_values(alpha) + unumpy.std_devs(alpha)
+        plt.fill_between(self.fr/1e12, lo, hi, color = 'r', alpha=0.2, label=r'1$\sigma$')
+        
+        plt.plot(self.fr/1e12,itk[0],'k--',label='95 % Confidence')
+        plt.plot(self.fr/1e12,itk[1],'k--')
+        plt.xlabel('Frequenz (THz)')
+        plt.ylabel(r'Absorption $\alpha$ (cm$^{-1}$)')
+        plt.legend()
+        plt.tight_layout()
 
 class ThreeLayerSystem(TDS):
     
@@ -391,13 +487,12 @@ class ThreeLayerSystem(TDS):
         
         val = np.array(val)
         dii = np.arange(dd[0],dd[-1],0.25e-6)
-        pp = interp1d(dd, val,kind='cubic')
+        pp = interp1d(dd, val, kind='cubic')
         self.dopt = dii[np.argmin(pp(dii))]
         if doPlot:
             plt.figure()
-            plt.plot(dd*1e6,val,'ks',markerfacecolor='none')
-            plt.plot(dii*1e6,pp(dii))
-            tvv = np.amax(val)-np.amin(val)
+            plt.plot(dd*1e6, val, 'ks', markerfacecolor='none')
+            plt.plot(dii*1e6, pp(dii))
             plt.vlines([self.dopt*1e6],np.amin(val)-0.1*val,np.amax(val),linestyles=':',linewidth=2)
             plt.text(dd[2]*1e6,np.amin(val),s='Best Thickness: {:2.2f} µm'.format(self.dopt*1e6))
             plt.xlabel(r'Thickness d ($\mu$m)')
@@ -579,31 +674,34 @@ if __name__ == '__main__':
     #dopt, ds, tvs = glass1.calculateBestThickness()
     glass1.dopt = 707.4e-6
     glass1.calculateN(glass1.dopt)
-
-    refn = glob.glob('Oil/Receiver glass/M1/*Reference*')
-    samn = glob.glob('Oil/Receiver glass/M1/*Cuv*')
-
-    glass2 = OneLayerSystem(710e-6)
-    glass2.loadData(refn, samn)
-    #glass2.cropTimeData(210e-12)
-    glass2.fbins = 10e9 
-    glass2.calculateTransferFunction()
-    glass2.estimateNoEchos()
-    #dopt, ds, tvs = glass2.calculateBestThickness()
-    glass2.dopt = 710.6e-6
-    glass2.calculateN(glass2.dopt)
-    
-    
-# %%
-    emptyCuvette = ThreeLayerSystem(glass1.n, glass2.n, glass1.dopt, glass2.dopt, 5900e-6)
-    refn = glob.glob('Oil/Cuvetttes/0EmptyNewCuvettes/M1/*Reference*')
-    samn = glob.glob('Oil/Cuvetttes/0EmptyNewCuvettes/M1/*Cuvette1*')
-    emptyCuvette.loadData(refn, samn)
-    
-    #Cuvette.cropTimeData(210e-12)
-    emptyCuvette.fbins = 10e9
-    #Cuvette.plotTimeDomainData()
-    emptyCuvette.calculateTransferFunction()
-    dopt = emptyCuvette.calculateBestThickness(dstep=7.5e-6, dinterval=300e-6, doPlot=True)
-    
-    
+    glass1.calculateUncertaintyH()
+    glass1.calculateUncertaintyOpticalConstants()
+    glass1.plotRefractiveIndexUnc()
+    glass1.plotAlpha()
+#    refn = glob.glob('Oil/Receiver glass/M1/*Reference*')
+#    samn = glob.glob('Oil/Receiver glass/M1/*Cuv*')
+#
+#    glass2 = OneLayerSystem(710e-6)
+#    glass2.loadData(refn, samn)
+#    #glass2.cropTimeData(210e-12)
+#    glass2.fbins = 10e9 
+#    glass2.calculateTransferFunction()
+#    glass2.estimateNoEchos()
+#    #dopt, ds, tvs = glass2.calculateBestThickness()
+#    glass2.dopt = 710.6e-6
+#    glass2.calculateN(glass2.dopt)
+#    
+#    
+## %%
+#    emptyCuvette = ThreeLayerSystem(glass1.n, glass2.n, glass1.dopt, glass2.dopt, 5900e-6)
+#    refn = glob.glob('Oil/Cuvetttes/0EmptyNewCuvettes/M1/*Reference*')
+#    samn = glob.glob('Oil/Cuvetttes/0EmptyNewCuvettes/M1/*Cuvette1*')
+#    emptyCuvette.loadData(refn, samn)
+#    
+#    #Cuvette.cropTimeData(210e-12)
+#    emptyCuvette.fbins = 10e9
+#    #Cuvette.plotTimeDomainData()
+#    emptyCuvette.calculateTransferFunction()
+#    dopt = emptyCuvette.calculateBestThickness(dstep=7.5e-6, dinterval=300e-6, doPlot=True)
+#    
+#    

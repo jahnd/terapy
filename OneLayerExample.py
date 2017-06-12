@@ -42,3 +42,7 @@ glass1.plotTotalVariation(ds,tvs)
 
 glass1.calculateN(glass1.dopt)
 glass1.plotRefractiveIndex(includeApproximation=True)
+glass1.calculateUncertaintyH()
+glass1.calculateUncertaintyOpticalConstants()
+glass1.plotRefractiveIndexUnc()
+glass1.plotAlpha()
