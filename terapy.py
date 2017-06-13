@@ -263,8 +263,7 @@ class OneLayerSystem(TDS):
             kappa = c / (omega * d) * \
                         (np.log(4 * n * n0 / (n + n0)**2) - np.log(Habs))
         else:
-            kappa = c / (omega * d)
-            kappa *= (unumpy.log(4 * n * n0 / (n + n0)**2) - unumpy.log(Habs))
+            kappa = c/(omega*d)*(unumpy.log(4*n*n0/(n + n0)**2) - unumpy.log(Habs))
         return n, -kappa
     
     def Ht(self, omega, n, d, noPulses):
@@ -413,13 +412,15 @@ class OneLayerSystem(TDS):
         ax2.plot(self.fr/1e12,ki[0],'k--')
         ax2.plot(self.fr/1e12,ki[1],'k--')
         if includeApproximation:
-            un, uk = self.calculateNApproximate(self.freqs, self.uHabs, self.uHphase, self.dcalculated)
+            fr, uHabs = cropFrequencyData(self.freqs, self.uHabs, self.fminCalculation, self.fmaxCalculation)
+            fr, uHphase = cropFrequencyData(self.freqs, self.uHphase, self.fminCalculation, self.fmaxCalculation)
+            un, uk = self.calculateNApproximate(fr, uHabs, uHphase, self.dcalculated)
             lo = unumpy.nominal_values(un) - unumpy.std_devs(un)
             hi = unumpy.nominal_values(un) + unumpy.std_devs(un)
-            ax1.fill_between(self.fr/1e12, lo, hi ,color='r', alpha=0.2)
+            ax1.fill_between(fr/1e12, lo, hi ,color='r', alpha=0.2)
             lo = unumpy.nominal_values(uk) - unumpy.std_devs(uk)
             hi = unumpy.nominal_values(uk) + unumpy.std_devs(uk)
-            ax2.fill_between(self.fr/1e12, lo, hi ,color='r', alpha=0.2)
+            ax2.fill_between(fr/1e12, lo, hi ,color='r', alpha=0.2)
     
     def plotAlpha(self):
         
@@ -439,6 +440,33 @@ class OneLayerSystem(TDS):
         plt.ylabel(r'Absorption $\alpha$ (cm$^{-1}$)')
         plt.legend()
         plt.tight_layout()
+    
+    def SVMAF(self):
+        fr, uHr = cropFrequencyData(self.freqs, self.uHreal, self.fminCalculation, self.fmaxCalculation)
+        fr, uHi = cropFrequencyData(self.freqs, self.uHimag, self.fminCalculation, self.fmaxCalculation)
+        
+        #Apply the SVMAF filter to the material parameters
+        #runningMean=lambda x,N: py.hstack((x[:N-1],py.cvolve(x,py.ones((N,))/N,mode='valid')[(N-1):],x[(-N+1):]))
+        runningMean=lambda x,N: np.hstack((x[:N-1],np.convolve(x,np.ones((N,))/N,mode='same')[N-1:-N+1],x[(-N+1):]))
+       
+        n_smoothed=runningMean(self.n,3) # no problem in doing real and imaginary part toether
+        
+        H_smoothed=self.Ht(2*np.pi*self.fr,n_smoothed,self.dcalculated,self.noPulses)
+        
+        H_r=H_smoothed.real
+        H_i=H_smoothed.imag
+        f=1
+        lb_r=unumpy.nominal_values(uHr) - f*unumpy.std_devs(uHr)
+        ub_r=unumpy.nominal_values(uHr) + f*unumpy.std_devs(uHr)
+        lb_i=unumpy.nominal_values(uHi) - f*unumpy.std_devs(uHi)
+        ub_i=unumpy.nominal_values(uHi) + f*unumpy.std_devs(uHi)
+        #ix=all indices for which after smoothening n H is still inbetwen the bounds        
+        ix=np.all([H_r>=lb_r,H_r<ub_r,H_i>=lb_i,H_i<ub_i],axis=0)
+        n_smoothed[np.logical_not(ix)] = self.n[np.logical_not(ix)]
+#        #dont have a goood idea at the moment, so manually:
+        print("SVMAF changed the refractive index at " + str(sum(ix)) + " frequencies")
+        return n_smoothed      
+        
 
 class ThreeLayerSystem(TDS):
     
@@ -692,6 +720,16 @@ if __name__ == '__main__':
 #    glass2.calculateN(glass2.dopt)
 #    
 #    
+#%%
+    fr, uHabs = cropFrequencyData(glass1.freqs, glass1.uHabs, glass1.fminCalculation, glass1.fmaxCalculation)
+    fr, uHphase = cropFrequencyData(glass1.freqs, glass1.uHphase, glass1.fminCalculation, glass1.fmaxCalculation)
+    #un, uk = glass1.calculateNApproximate(fr, uHabs, uHphase, glass1.dcalculated)
+    d = glass1.dcalculated
+    n0 = 1
+    omega = 2 * np.pi * fr
+    n = n0 - c / (omega * d) * uHphase
+    kappa = c / (omega * d) * (unumpy.log(4 * n * n0 / (n + n0)**2) - unumpy.log(uHabs))
+
 ## %%
 #    emptyCuvette = ThreeLayerSystem(glass1.n, glass2.n, glass1.dopt, glass2.dopt, 5900e-6)
 #    refn = glob.glob('Oil/Cuvetttes/0EmptyNewCuvettes/M1/*Reference*')
