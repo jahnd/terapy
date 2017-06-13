@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """
 Spyder Editor
-
 This is a temporary script file.
 """
 
@@ -197,6 +196,20 @@ class TDS:
         lo = unumpy.nominal_values(self.uHphase) - unumpy.std_devs(self.uHphase)
         hi = unumpy.nominal_values(self.uHphase) + unumpy.std_devs(self.uHphase)
         ax2.fill_between(self.freqs / 1e12, lo, hi , color='r', alpha=0.2)
+        plt.tight_layout()
+    
+    def plotTransferFuncRealImagUnc(self, f=2):
+        plt.figure()
+        lo = unumpy.nominal_values(self.uHreal) - f * unumpy.std_devs(self.uHreal)
+        hi = unumpy.nominal_values(self.uHreal) + f * unumpy.std_devs(self.uHreal)
+        plt.fill_between(self.freqs / 1e12, lo, hi,color='r', alpha=0.2 )
+        plt.plot(self.freqs/1e12, unumpy.nominal_values(self.uHreal),'k')
+        lo = unumpy.nominal_values(self.uHimag) - f * unumpy.std_devs(self.uHimag)
+        hi = unumpy.nominal_values(self.uHimag) + f * unumpy.std_devs(self.uHimag)
+        plt.fill_between(self.freqs / 1e12, lo, hi,color='r', alpha=0.2 )
+        plt.plot(self.freqs/1e12, unumpy.nominal_values(self.uHimag),'k')
+        plt.xlim(self.fminCalculation/1e12, self.fmaxCalculation/1e12)
+        plt.ylim(-1,1)
         plt.tight_layout()
     
     def plotRefractiveIndex(self):
@@ -441,7 +454,7 @@ class OneLayerSystem(TDS):
         plt.legend()
         plt.tight_layout()
     
-    def SVMAF(self):
+    def SVMAF(self,interval=2):
         fr, uHr = cropFrequencyData(self.freqs, self.uHreal, self.fminCalculation, self.fmaxCalculation)
         fr, uHi = cropFrequencyData(self.freqs, self.uHimag, self.fminCalculation, self.fmaxCalculation)
         
@@ -455,18 +468,21 @@ class OneLayerSystem(TDS):
         
         H_r=H_smoothed.real
         H_i=H_smoothed.imag
-        f=1
-        lb_r=unumpy.nominal_values(uHr) - f*unumpy.std_devs(uHr)
-        ub_r=unumpy.nominal_values(uHr) + f*unumpy.std_devs(uHr)
-        lb_i=unumpy.nominal_values(uHi) - f*unumpy.std_devs(uHi)
-        ub_i=unumpy.nominal_values(uHi) + f*unumpy.std_devs(uHi)
+        
+        lb_r=unumpy.nominal_values(uHr) - interval*unumpy.std_devs(uHr)
+        ub_r=unumpy.nominal_values(uHr) + interval*unumpy.std_devs(uHr)
+        lb_i=unumpy.nominal_values(uHi) - interval*unumpy.std_devs(uHi)
+        ub_i=unumpy.nominal_values(uHi) + interval*unumpy.std_devs(uHi)
         #ix=all indices for which after smoothening n H is still inbetwen the bounds        
         ix=np.all([H_r>=lb_r,H_r<ub_r,H_i>=lb_i,H_i<ub_i],axis=0)
         n_smoothed[np.logical_not(ix)] = self.n[np.logical_not(ix)]
 #        #dont have a goood idea at the moment, so manually:
         print("SVMAF changed the refractive index at " + str(sum(ix)) + " frequencies")
         return n_smoothed      
-        
+    
+    def applySVMAF(self, Niteration = 5, aggresivity = 3):
+        for i in range(Niteration):
+            self.n = self.SVMAF(3)
 
 class ThreeLayerSystem(TDS):
     
@@ -704,8 +720,15 @@ if __name__ == '__main__':
     glass1.calculateN(glass1.dopt)
     glass1.calculateUncertaintyH()
     glass1.calculateUncertaintyOpticalConstants()
+    
     glass1.plotRefractiveIndexUnc()
     glass1.plotAlpha()
+    
+    glass1.applySVMAF(20)
+    glass1.plotRefractiveIndexUnc()
+    glass1.plotAlpha()
+    # %%
+   
 #    refn = glob.glob('Oil/Receiver glass/M1/*Reference*')
 #    samn = glob.glob('Oil/Receiver glass/M1/*Cuv*')
 #
@@ -721,14 +744,6 @@ if __name__ == '__main__':
 #    
 #    
 #%%
-    fr, uHabs = cropFrequencyData(glass1.freqs, glass1.uHabs, glass1.fminCalculation, glass1.fmaxCalculation)
-    fr, uHphase = cropFrequencyData(glass1.freqs, glass1.uHphase, glass1.fminCalculation, glass1.fmaxCalculation)
-    #un, uk = glass1.calculateNApproximate(fr, uHabs, uHphase, glass1.dcalculated)
-    d = glass1.dcalculated
-    n0 = 1
-    omega = 2 * np.pi * fr
-    n = n0 - c / (omega * d) * uHphase
-    kappa = c / (omega * d) * (unumpy.log(4 * n * n0 / (n + n0)**2) - unumpy.log(uHabs))
 
 ## %%
 #    emptyCuvette = ThreeLayerSystem(glass1.n, glass2.n, glass1.dopt, glass2.dopt, 5900e-6)
@@ -742,4 +757,4 @@ if __name__ == '__main__':
 #    emptyCuvette.calculateTransferFunction()
 #    dopt = emptyCuvette.calculateBestThickness(dstep=7.5e-6, dinterval=300e-6, doPlot=True)
 #    
-#    
+#

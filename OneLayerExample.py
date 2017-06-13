@@ -46,3 +46,7 @@ glass1.calculateUncertaintyH()
 glass1.calculateUncertaintyOpticalConstants()
 glass1.plotRefractiveIndexUnc()
 glass1.plotAlpha()
+
+glass1.applySVMAF(20)
+glass1.plotRefractiveIndexUnc()
+glass1.plotAlpha()
