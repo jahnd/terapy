@@ -138,8 +138,8 @@ class TDS:
     def plotTimeDomainDataUnc(self):
         self.plotTimeDomainData()
         
-        refi = studentt.interval(0.95,self.noDatas-1, loc=self.reference, scale=self.var_r**0.5)
-        sami = studentt.interval(0.95,self.noDatas-1, loc=self.sample, scale=self.var_s**0.5)
+        refi = studentt.interval(0.95,self.noDatas-1, loc=self.reference, scale=self.var_r**0.5/self.noDatas**0.5)
+        sami = studentt.interval(0.95,self.noDatas-1, loc=self.sample, scale=self.var_s**0.5/self.noDatas**0.5)
         plt.fill_between(self.taxis*1e12,self.reference-self.var_r**0.5,self.reference+self.var_r**0.5,color='r',label=r'1$\sigma$',alpha=0.2)
         plt.fill_between(self.taxis*1e12,self.sample-self.var_s**0.5,self.sample+self.var_s**0.5,color='k',alpha=0.2)
         #plt.errorbar(self.taxis*1e12,self.sample, yerr=self.var_s**0.5,color='r',label='Reference')
@@ -418,8 +418,8 @@ class OneLayerSystem(TDS):
         ax1, ax2 = plt.gcf().axes
         ax1.fill_between(self.fr/1e12, self.n.real - self.stdn, self.n.real + self.stdn,color='r', alpha=0.2)
         ax2.fill_between(self.fr/1e12, self.n.imag - self.stdk, self.n.imag + self.stdk,color='r', alpha=0.2)
-        ni = studentt.interval(0.95,self.noDatas-1, loc=self.n.real, scale = self.stdn)
-        ki = studentt.interval(0.95,self.noDatas-1, loc=self.n.imag, scale = self.stdk)
+        ni = studentt.interval(0.95,self.noDatas-1, loc=self.n.real, scale = self.stdn/self.noDatas**0.5)
+        ki = studentt.interval(0.95,self.noDatas-1, loc=self.n.imag, scale = self.stdk/self.noDatas**0.5)
         ax1.plot(self.fr/1e12,ni[0],'k--',label='95 % confidence')
         ax1.plot(self.fr/1e12,ni[1],'k--')
         ax2.plot(self.fr/1e12,ki[0],'k--')
@@ -440,7 +440,7 @@ class OneLayerSystem(TDS):
         ni = unumpy.uarray(self.n.imag, self.stdk)
         alpha = -ni * 2 * (2*np.pi*self.fr)/c*1e-2
         itk = studentt.interval(0.95,self.noDatas-1, loc=unumpy.nominal_values(alpha),
-                         scale=unumpy.std_devs(alpha))
+                         scale=unumpy.std_devs(alpha)/self.noDatas**0.5)
         plt.figure()
         plt.plot(self.fr/1e12, unumpy.nominal_values(alpha),'k',label=r'$\alpha$')
         lo = unumpy.nominal_values(alpha) - unumpy.std_devs(alpha)
@@ -656,7 +656,7 @@ def loadfiles(fns):
     for i in range(1, len(fns)):
         d[:, i] = np.loadtxt(fns[i])[:, 1]
 
-    return taxis, np.mean(d, axis=1), np.var(d, axis=1)
+    return taxis, np.mean(d, axis=1), np.var(d, axis=1, ddof=1)
 
 
 def phaseOffsetRemoval(freq, phase, fmin=0.5, fmax=2):
@@ -715,46 +715,47 @@ if __name__ == '__main__':
     glass1.fbins = 10e9 
     glass1.calculateTransferFunction()
     glass1.estimateNoEchos()
-    #dopt, ds, tvs = glass1.calculateBestThickness()
-    glass1.dopt = 707.4e-6
-    glass1.calculateN(glass1.dopt)
-    glass1.calculateUncertaintyH()
-    glass1.calculateUncertaintyOpticalConstants()
+    dopt, ds, tvs = glass1.calculateBestThickness()
+#    glass1.plotTotalVariation(ds,tvs)
+    #glass1.dopt = 707.4e-6
+    glass1.calculateN(707.4e-6)
+#    glass1.calculateUncertaintyH()
+#    glass1.calculateUncertaintyOpticalConstants()
     
-    glass1.plotRefractiveIndexUnc()
-    glass1.plotAlpha()
+#    glass1.plotRefractiveIndexUnc()
+#    glass1.plotAlpha()
     
-    glass1.applySVMAF(20)
-    glass1.plotRefractiveIndexUnc()
-    glass1.plotAlpha()
+    #glass1.applySVMAF(20)
+    #glass1.plotRefractiveIndexUnc()
+    #glass1.plotAlpha()
     # %%
    
-#    refn = glob.glob('Oil/Receiver glass/M1/*Reference*')
-#    samn = glob.glob('Oil/Receiver glass/M1/*Cuv*')
+    refn = glob.glob('Oil/Receiver glass/M1/*Reference*')
+    samn = glob.glob('Oil/Receiver glass/M1/*Cuv*')
 #
-#    glass2 = OneLayerSystem(710e-6)
-#    glass2.loadData(refn, samn)
-#    #glass2.cropTimeData(210e-12)
-#    glass2.fbins = 10e9 
-#    glass2.calculateTransferFunction()
-#    glass2.estimateNoEchos()
-#    #dopt, ds, tvs = glass2.calculateBestThickness()
-#    glass2.dopt = 710.6e-6
-#    glass2.calculateN(glass2.dopt)
+    glass2 = OneLayerSystem(710e-6)
+    glass2.loadData(refn, samn)
+     #glass2.cropTimeData(210e-12)
+    glass2.fbins = 10e9 
+    glass2.calculateTransferFunction()
+    glass2.estimateNoEchos()
+    #dopt, ds, tvs = glass2.calculateBestThickness()
+    glass2.dopt = 710.6e-6
+    glass2.calculateN(glass2.dopt)
 #    
 #    
 #%%
 
-## %%
-#    emptyCuvette = ThreeLayerSystem(glass1.n, glass2.n, glass1.dopt, glass2.dopt, 5900e-6)
-#    refn = glob.glob('Oil/Cuvetttes/0EmptyNewCuvettes/M1/*Reference*')
-#    samn = glob.glob('Oil/Cuvetttes/0EmptyNewCuvettes/M1/*Cuvette1*')
-#    emptyCuvette.loadData(refn, samn)
-#    
-#    #Cuvette.cropTimeData(210e-12)
-#    emptyCuvette.fbins = 10e9
-#    #Cuvette.plotTimeDomainData()
-#    emptyCuvette.calculateTransferFunction()
-#    dopt = emptyCuvette.calculateBestThickness(dstep=7.5e-6, dinterval=300e-6, doPlot=True)
+#%%
+    emptyCuvette = ThreeLayerSystem(glass1.n, glass2.n, glass1.dopt, glass2.dopt, 5900e-6)
+    refn = glob.glob('Oil/Cuvetttes/0EmptyNewCuvettes/M1/*Reference*')
+    samn = glob.glob('Oil/Cuvetttes/0EmptyNewCuvettes/M1/*Cuvette1*')
+    emptyCuvette.loadData(refn, samn)
+    
+    #Cuvette.cropTimeData(210e-12)
+    emptyCuvette.fbins = 10e9
+    #Cuvette.plotTimeDomainData()
+    emptyCuvette.calculateTransferFunction()
+    dopt = emptyCuvette.calculateBestThickness(dstep=7.5e-6, dinterval=300e-6, doPlot=True)
 #    
 #
